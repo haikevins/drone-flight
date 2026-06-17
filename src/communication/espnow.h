@@ -22,8 +22,8 @@ class ESPNow
         bool register_peer();
 
     private:
-        // REPLACE WITH YOUR RECEIVER MAC Address
-        uint8_t broadcast_address[6] = {0xAC, 0xA7, 0x04, 0xBB, 0x6D, 0x64};
+        // replace with receiver's mac address
+        uint8_t controller_address[6] = {0xAC, 0xA7, 0x04, 0xBB, 0x6D, 0x64};
 
         bool add_peer(const esp_now_peer_info_t* peerInfo);
 };

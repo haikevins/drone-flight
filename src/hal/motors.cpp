@@ -5,7 +5,7 @@
 
 #include "hal/motors.h"
 
-uint32_t Motor::throttle_to_pwm (float throttle)
+uint32_t Motors::throttle_to_pwm (float throttle)
 {
     const float clamped = constrain(throttle, motor_speed_min_us, motor_speed_max_us);
     const float pwm = (clamped - motor_speed_min_us) * motor_pwm_max / (motor_speed_max_us - motor_speed_min_us);
@@ -13,7 +13,7 @@ uint32_t Motor::throttle_to_pwm (float throttle)
     return static_cast<uint32_t>(pwm);
 }
 
-void Motor::write_motors (float motor_1_throttle, float motor_2_throttle, float motor_3_throttle, float motor_4_throttle)
+void Motors::write_motors (float motor_1_throttle, float motor_2_throttle, float motor_3_throttle, float motor_4_throttle)
 {
     ledcWrite(motor_channel_1, throttle_to_pwm(motor_1_throttle));
     ledcWrite(motor_channel_2, throttle_to_pwm(motor_2_throttle));
@@ -21,7 +21,7 @@ void Motor::write_motors (float motor_1_throttle, float motor_2_throttle, float 
     ledcWrite(motor_channel_4, throttle_to_pwm(motor_4_throttle));
 }
 
-void Motor::setup_motors ()
+void Motors::setup_motors ()
 {
     ledcSetup(motor_channel_1, motor_freq_hz, motor_resolution_bits);
     ledcSetup(motor_channel_2, motor_freq_hz, motor_resolution_bits);

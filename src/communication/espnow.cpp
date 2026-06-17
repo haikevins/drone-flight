@@ -1,23 +1,29 @@
 #include "communication/espnow.h"
+#include "common/parameters.h"
 
 ESPNow::ESPNow()
-{
-}
+{}
 
 bool ESPNow::begin()
 {
     WiFi.mode(WIFI_STA);
+
     if (esp_now_init() != ESP_OK)
     {
-        Serial.println("Error initializing ESP-NOW");
         return false;
     }
+    
     return true;
 }
 
 bool ESPNow::send(const uint8_t* data, size_t len)
 {
-    return esp_now_send(broadcast_address, data, len) == ESP_OK;
+    if (esp_now_send(controller_address, data, len) == ESP_OK)
+    {
+        return true;
+    }
+
+    return false;
 }
 
 void ESPNow::register_recv_callback(esp_now_recv_cb_t callback)
@@ -46,13 +52,18 @@ void ESPNow::on_data_sent(const uint8_t *mac_addr, esp_now_send_status_t status)
 
 void ESPNow::on_data_recv(const uint8_t *mac_addr, const uint8_t *data, int data_len)
 {
-    // This function can be used to handle received data if needed
+    memcpy(&g_espnow_command_data, data, sizeof(g_espnow_command_data));
+
+    Serial.print("\r\nBytes received: ");
+    Serial.println(data_len);
+    Serial.print("arm: ");
+    Serial.println(g_espnow_command_data.arm);
 }
 
 bool ESPNow::register_peer()
 {
     esp_now_peer_info_t peerInfo;
-    memcpy(peerInfo.peer_addr, broadcast_address, 6);
+    memcpy(peerInfo.peer_addr, controller_address, 6);
 
     peerInfo.channel = 0;
     peerInfo.encrypt = false;
