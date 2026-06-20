@@ -165,12 +165,14 @@ bool MPU6500::begin(SPIBus * p_spi_bus_ref, uint8_t chip_select_pin_ref, int sck
     /*
      * Clear any stale interrupt status.
      */
-    (void)p_spi_bus->read_register(chip_select_pin, int_status_reg);
+    p_spi_bus->read_register(chip_select_pin, int_status_reg);
 
     timing.last_us = micros();
     timing.now_us = timing.last_us;
     timing.dt = 0.0f;
     timing.imu_dt = 0.0f;
+
+    reset_filters();
 
     return true;
 }
@@ -304,6 +306,8 @@ void MPU6500::set_body_rotation(float roll_rad, float pitch_rad, float yaw_rad)
     imu_rotation_roll = roll_rad;
     imu_rotation_pitch = pitch_rad;
     imu_rotation_yaw = yaw_rad;
+
+    reset_filters();
 }
 
 void MPU6500::rotate_vector_to_body(float & x, float & y, float & z) const
@@ -356,6 +360,13 @@ void MPU6500::rotate_to_body_frame()
 
 void MPU6500::low_pass_filter()
 {
+    if (filters_initialized == false)
+    {
+        filtered = scaled;
+        filters_initialized = true;
+        return;
+    }
+
     filtered.gx = lpf_step(filtered.gx, scaled.gx, gyro_alpha);
     filtered.gy = lpf_step(filtered.gy, scaled.gy, gyro_alpha);
     filtered.gz = lpf_step(filtered.gz, scaled.gz, gyro_alpha);
@@ -390,6 +401,8 @@ void MPU6500::calibrate_gyro(uint16_t samples)
     gyro_bias_x = gyro_raw_to_deg_s(static_cast<int16_t>(sum_raw_x / samples));
     gyro_bias_y = gyro_raw_to_deg_s(static_cast<int16_t>(sum_raw_y / samples));
     gyro_bias_z = gyro_raw_to_deg_s(static_cast<int16_t>(sum_raw_z / samples));
+
+    reset_filters();
 }
 
 void MPU6500::calibrate_accel_once(uint16_t samples)
@@ -440,8 +453,9 @@ void MPU6500::calibrate_accel_once(uint16_t samples)
     accel_scale_x = 1.0f;
     accel_scale_y = 1.0f;
     accel_scale_z = 1.0f;
-}
 
+    reset_filters();
+}
 
 bool MPU6500::calibrate_accel_6_side(uint16_t samples_per_side, Stream * p_stream, bool wait_for_user)
 {
@@ -562,9 +576,7 @@ bool MPU6500::calibrate_accel_6_side(uint16_t samples_per_side, Stream * p_strea
     /*
      * Avoid mixing pre-calibration filtered output with post-calibration data.
      */
-    filtered.ax = 0.0f;
-    filtered.ay = 0.0f;
-    filtered.az = 0.0f;
+    reset_filters();
 
     if (p_stream != nullptr)
     {
@@ -585,6 +597,8 @@ void MPU6500::set_accel_calibration(float bias_x, float bias_y, float bias_z,
     accel_scale_x = safe_divisor(scale_x);
     accel_scale_y = safe_divisor(scale_y);
     accel_scale_z = safe_divisor(scale_z);
+
+    reset_filters();
 }
 
 MPU6500::accel_calibration_t MPU6500::get_accel_calibration() const
@@ -627,6 +641,11 @@ void MPU6500::set_gyro_lpf(float alpha)
 void MPU6500::set_accel_lpf(float alpha)
 {
     accel_alpha = clamp_alpha(alpha);
+}
+
+void MPU6500::reset_filters()
+{
+    filters_initialized = false;
 }
 
 const MPU6500::raw_data_t & MPU6500::get_raw() const

@@ -1,6 +1,5 @@
 /*
  * main.cpp
- * MPU6500 + Madgwick attitude test.
  */
 
 #include <Arduino.h>
@@ -31,23 +30,18 @@ static PIDController g_pid_yaw_rate(3.0f, 0.01f, 0.005f, 10.0f, 100.0f, 0.5f);
 
 static ESPNow g_espnow;
 
-static float gx = 0.0f;
-static float gy = 0.0f;
-static float gz = 0.0f;
-
 static attitude_data_packet_t g_attitude_data =
 {
     0.0f,
     0.0f,
     0.0f
 };
-    
-static constexpr float g_target_roll_rate = 0.0f;
-static constexpr float g_target_pitch_rate = 0.0f;
-static constexpr float g_target_yaw_rate = 0.0f;
 
-static constexpr float g_target_roll_angle = 0.0f;
-static constexpr float g_target_pitch_angle = 0.0f;
+static constexpr float g_target_yaw_rate = 0.0f;
+static float g_target_roll_angle = 0.0f;
+static float g_target_pitch_angle = 0.0f;
+
+static constexpr float g_direction_deg = 20.0f;
 
 static constexpr uint8_t g_imu_pin_sck = 4u;
 static constexpr uint8_t g_imu_pin_miso = 5u;
@@ -58,6 +52,19 @@ static constexpr float g_imu_read_default_hz = 1000.0f;
 
 static constexpr float g_imu_gyro_lpf_alpha = 0.22f;
 static constexpr float g_imu_accel_lpf_alpha = 0.10f;
+
+static constexpr float g_madgwick_beta_disarm = 0.10f;
+static constexpr float g_madgwick_beta_idle = 0.06f;
+static constexpr float g_madgwick_beta_flying = 0.03f;
+static constexpr float g_madgwick_beta_min = 0.003f;
+
+static constexpr float g_madgwick_acc_error_good = 0.08f;
+static constexpr float g_madgwick_acc_error_bad = 0.25f;
+
+static constexpr float g_madgwick_beta_alpha = 0.02f;
+static constexpr float g_madgwick_confidence_min = 0.90f;
+
+static float g_madgwick_beta_current = g_madgwick_beta_disarm;
 
 static constexpr uint32_t g_espnow_trans_period_ms = 50u; // 20 Hz
 static uint32_t g_espnow_trans_last_time = 0u;
@@ -75,6 +82,10 @@ static bool g_was_armed = false;
 static void setup_imu();
 static void setup_pid();
 static void setup_espnow();
+static float accel_confidence(float ax, float ay, float az);
+static float update_madgwick_beta(float ax, float ay, float az);
+static void update_attitude_target();
+static void reset_attitude_target();
 
 void setup()
 {
@@ -100,6 +111,14 @@ void loop()
     const auto& imu_data = g_imu.get_filtered();
     const auto& imu_dt = g_imu.get_timing().dt;
 
+    const float beta = update_madgwick_beta(
+        imu_data.ax,
+        imu_data.ay,
+        imu_data.az
+    );
+
+    g_madgwick.setBeta(beta);
+
     g_madgwick.updateIMUdt(
         imu_data.gx,
         imu_data.gy,
@@ -110,22 +129,9 @@ void loop()
         imu_dt
     );
 
-    gx = imu_data.gx;
-    gy = imu_data.gy;
-    gz = imu_data.gz;
-
     g_attitude_data.roll = g_madgwick.getRoll();
     g_attitude_data.pitch = g_madgwick.getPitch();
     g_attitude_data.yaw = g_madgwick.getYaw();
-
-    // Angle pid: angle error -> target rate
-    float roll_rate_sp = g_pid_roll_angle.update(g_target_roll_angle, g_attitude_data.roll, imu_dt, false, true);
-    float pitch_rate_sp = g_pid_pitch_angle.update(g_target_pitch_angle, g_attitude_data.pitch, imu_dt, false, true);
-
-    // Rate pid: target rate - gyro rate -> motor correction
-    float roll_output = g_pid_roll_rate.update(roll_rate_sp, gx, imu_dt, false, true);
-    float pitch_output = g_pid_pitch_rate.update(pitch_rate_sp, gy, imu_dt, false, true);
-    float yaw_output = g_pid_yaw_rate.update(g_target_yaw_rate, gz, imu_dt, false, true);
 
     if (g_espnow.is_reset() == true) 
     { 
@@ -158,22 +164,57 @@ void loop()
 
         g_motor_throttle_base = constrain(g_motor_throttle_base, g_motor_throttle_idle, g_motor_throttle_base_max);
 
-        float motor1_speed = g_motor_throttle_base + roll_output - pitch_output + yaw_output; // front left
-        float motor2_speed = g_motor_throttle_base - roll_output - pitch_output - yaw_output + 60.0f; // front
-        float motor3_speed = g_motor_throttle_base - roll_output + pitch_output + yaw_output + 120.0f; // rear
-        float motor4_speed = g_motor_throttle_base + roll_output + pitch_output - yaw_output + 10.0f; // rear right
+        update_attitude_target();
 
-        g_motors.write_motors(
-            motor1_speed,
-            motor2_speed,
-            motor3_speed,
-            motor4_speed
-        );
+        const bool apply_pid = (g_motor_throttle_base > (g_motor_throttle_idle + 1.0f));
+
+        if (apply_pid == true)
+        {
+            // Angle PID: attitude angle error -> target angular rate.
+            const float roll_rate_sp = g_pid_roll_angle.update(
+                g_target_roll_angle,
+                g_attitude_data.roll,
+                imu_dt,
+                false,
+                true
+            );
+
+            const float pitch_rate_sp = g_pid_pitch_angle.update(
+                g_target_pitch_angle,
+                g_attitude_data.pitch,
+                imu_dt,
+                false,
+                true
+            );
+
+            // Rate PID: target angular rate - gyro rate -> motor correction.
+            float roll_output = g_pid_roll_rate.update(roll_rate_sp, imu_data.gx, imu_dt, false, true);
+            float pitch_output = g_pid_pitch_rate.update(pitch_rate_sp, imu_data.gy, imu_dt, false, true);
+            float yaw_output = g_pid_yaw_rate.update(g_target_yaw_rate, imu_data.gz, imu_dt, false, true);
+
+            float motor1_speed = g_motor_throttle_base + roll_output - pitch_output + yaw_output; // front left
+            float motor2_speed = g_motor_throttle_base - roll_output - pitch_output - yaw_output + 60.0f; // front right
+            float motor3_speed = g_motor_throttle_base - roll_output + pitch_output + yaw_output + 120.0f; // rear right
+            float motor4_speed = g_motor_throttle_base + roll_output + pitch_output - yaw_output + 10.0f; // rear left
+
+            g_motors.write_motors(
+                motor1_speed,
+                motor2_speed,
+                motor3_speed,
+                motor4_speed
+            );
+        }
+        else
+        {
+            setup_pid();
+            g_motors.write_all_motors(g_motor_throttle_idle);
+        }
     }
     else
     {
         g_was_armed = false;
         g_motor_throttle_base = g_motor_throttle_idle;
+        reset_attitude_target();
         setup_pid();
         g_motors.write_all_motors(g_motor_throttle_base_min);
     }
@@ -183,6 +224,87 @@ void loop()
         g_espnow_trans_last_time = now;
         g_espnow.send_attitude(g_attitude_data);
     }    
+}
+
+static void reset_attitude_target()
+{
+    g_target_roll_angle = 0.0f;
+    g_target_pitch_angle = 0.0f;
+}
+
+static void update_attitude_target()
+{
+    float roll_target = 0.0f;
+    float pitch_target = 0.0f;
+
+    if (g_espnow.is_direction_left() == true)
+    {
+        roll_target = -g_direction_deg;
+    }
+    else if (g_espnow.is_direction_right() == true)
+    {
+        roll_target = g_direction_deg;
+    }
+
+    if (g_espnow.is_direction_forward() == true)
+    {
+        pitch_target = g_direction_deg;
+    }
+    else if (g_espnow.is_direction_backward() == true)
+    {
+        pitch_target = -g_direction_deg;
+    }
+
+    g_target_roll_angle = roll_target;
+    g_target_pitch_angle = pitch_target;
+}
+
+static float accel_confidence(float ax, float ay, float az)
+{
+    const float acc_norm = sqrtf((ax * ax) + (ay * ay) + (az * az));
+    const float acc_error = fabsf(acc_norm - 1.0f); // tinh loi acc norm
+
+    if (acc_error <= g_madgwick_acc_error_good) // loi nho hon 0.08f
+    {
+        return 1.0f;
+    }
+
+    if (acc_error >= g_madgwick_acc_error_bad) // loi lon hon 0.25f
+    {
+        return 0.0f;
+    }
+
+    return (g_madgwick_acc_error_bad - acc_error) / (g_madgwick_acc_error_bad - g_madgwick_acc_error_good);
+}
+
+static float update_madgwick_beta(float ax, float ay, float az)
+{
+    const float acc_confidence = accel_confidence(ax, ay, az);
+
+    const bool is_armed = g_espnow.is_armed();
+    const bool is_disarmed = ((is_armed == false) && (acc_confidence >= g_madgwick_confidence_min));
+    const bool is_flying = ((is_armed == true) && (g_motor_throttle_base >= g_motor_throttle_idle + 100.0f));
+
+    float beta_base;
+
+    if (is_flying == true)
+    {
+        g_madgwick_beta_current = g_madgwick_beta_flying;
+    }
+    else if (is_armed == true)
+    {
+        g_madgwick_beta_current = g_madgwick_beta_idle;
+    }
+    else if (is_disarmed == true)
+    {
+        g_madgwick_beta_current = g_madgwick_beta_disarm;
+    }
+
+    const float beta_target = g_madgwick_beta_min + (acc_confidence * (beta_base - g_madgwick_beta_min));
+
+    g_madgwick_beta_current += g_madgwick_beta_alpha * (beta_target - g_madgwick_beta_current); // lpf
+
+    return g_madgwick_beta_current;
 }
 
 void setup_imu()
@@ -233,6 +355,7 @@ void setup_imu()
     g_imu.set_accel_lpf(g_imu_accel_lpf_alpha);
 
     g_madgwick.begin(g_imu_read_default_hz);
+    g_madgwick.setBeta(g_madgwick_beta_current);
 }
 
 void setup_pid()

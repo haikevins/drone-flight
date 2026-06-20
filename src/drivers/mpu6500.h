@@ -109,6 +109,8 @@ class MPU6500
         void set_gyro_lpf(float alpha);
         void set_accel_lpf(float alpha);
 
+        void reset_filters();
+
         const raw_data_t & get_raw() const;
         const scaled_data_t & get_scaled() const;
         const scaled_data_t & get_filtered() const;
@@ -121,6 +123,8 @@ class MPU6500
         raw_data_t raw;
         scaled_data_t scaled;
         scaled_data_t filtered;
+
+        bool filters_initialized = false;
 
         timing_t timing;
 
