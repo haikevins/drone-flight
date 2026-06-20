@@ -197,6 +197,16 @@ void loop()
             float motor3_speed = g_motor_throttle_base - roll_output + pitch_output + yaw_output + 120.0f; // rear right
             float motor4_speed = g_motor_throttle_base + roll_output + pitch_output - yaw_output + 10.0f; // rear left
 
+            float max_motor_speed = max(max(motor1_speed, motor2_speed), max(motor3_speed, motor4_speed));
+            if (max_motor_speed > g_motor_throttle_max)
+            {
+                float diff = max_motor_speed - g_motor_throttle_max;
+                motor1_speed -= diff;
+                motor2_speed -= diff;
+                motor3_speed -= diff;
+                motor4_speed -= diff;
+            }
+
             g_motors.write_motors(
                 motor1_speed,
                 motor2_speed,
@@ -285,7 +295,7 @@ static float update_madgwick_beta(float ax, float ay, float az)
     const bool is_disarmed = ((is_armed == false) && (acc_confidence >= g_madgwick_confidence_min));
     const bool is_flying = ((is_armed == true) && (g_motor_throttle_base >= g_motor_throttle_idle + 100.0f));
 
-    float beta_base;
+    float beta_base = g_madgwick_beta_disarm;
 
     if (is_flying == true)
     {

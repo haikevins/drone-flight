@@ -62,7 +62,7 @@ class ESPNow
         bool last_send_success;
         bool rssi_filter_initialized;
 
-        static constexpr float rssi_filter_alpha = 0.20f;        
+        static constexpr float rssi_filter_alpha = 0.20f; // lpf rssi  
 
         static ESPNow * active_instance;
 

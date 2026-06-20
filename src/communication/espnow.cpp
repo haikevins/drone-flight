@@ -211,7 +211,6 @@ void ESPNow::on_data_recv(const esp_now_recv_info_t *info, const uint8_t *data, 
     }
 
     memcpy(&self->command_data, data, sizeof(self->command_data));
-
 }
 
 bool ESPNow::register_peer()
@@ -225,7 +224,6 @@ bool ESPNow::register_peer()
     const bool success = add_peer(&peerInfo);
 
     return success;
-    
 }
 
 bool ESPNow::add_peer(const esp_now_peer_info_t* peerInfo)
